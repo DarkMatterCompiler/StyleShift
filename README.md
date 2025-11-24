@@ -258,12 +258,55 @@ python -m spacy download en_core_web_sm
 $env:FLASK_RUN_PORT='8080'; python app.py
 ```
 
-### Issue: Out of memory
+### Issue: "memory layout cannot be allocated" (Ollama Memory Error)
+
+This is the most common error with `gemma3:4b` and larger models. The model is trying to load more data than your system can handle.
+
+**Solution 1 - Use a Smaller Model** (Recommended):
+```powershell
+# Pull and use a lighter model
+ollama pull gemma2:2b
+
+# Then edit model.py line 817 to change the default model:
+# def __init__(self, ollama_model: str = "gemma2:2b"):
+```
+
+**Solution 2 - Reduce Input Text Length**:
+- Use shorter text samples (under 100 words for analysis)
+- Break longer texts into smaller chunks
+- The app now automatically truncates long prompts
+
+**Solution 3 - Free Up System Memory**:
+```powershell
+# Stop Ollama completely
+ollama stop
+
+# Close other applications (browsers, etc.)
+
+# Restart Ollama
+# On Windows: Restart the Ollama application
+# On macOS/Linux: ollama serve &
+
+# Try again with fresh memory
+```
+
+**Solution 4 - Increase Ollama Memory Limit** (Advanced):
+```powershell
+# Set environment variable before starting Ollama
+# Windows PowerShell:
+$env:OLLAMA_MAX_LOADED_MODELS=1
+$env:OLLAMA_NUM_PARALLEL=1
+
+# Then restart Ollama application
+```
+
+### Issue: Out of memory (General)
 
 **Solution**:
 - Use a smaller Ollama model (e.g., `gemma2:2b` instead of `gemma3:4b` or `llama2`)
 - Reduce training corpus size
 - Close other applications
+- Restart your computer to free up memory
 
 ## Project Structure
 
