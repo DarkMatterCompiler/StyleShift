@@ -5,7 +5,7 @@ Flask Web Application for Style Transfer
 from flask import Flask, render_template, request, jsonify
 import json
 import os
-from apii import StyleAnalyzer, StyleTransferEngine, StyleVector
+from model import StyleAnalyzer, StyleTransferEngine, StyleVector
 from dataclasses import asdict
 
 app = Flask(__name__)
@@ -147,5 +147,10 @@ if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     os.makedirs('static', exist_ok=True)
     
-    # Run on specified host and port
-    app.run(host='172.16.23.107', port=5002, debug=True)
+    # Run on specified host and port (configurable via environment)
+    host = os.environ.get('FLASK_RUN_HOST', '127.0.0.1')
+    port = int(os.environ.get('FLASK_RUN_PORT', 5002))
+    debug_env = os.environ.get('FLASK_DEBUG', 'True')
+    debug = True if str(debug_env).lower() in ('1', 'true', 'yes') else False
+
+    app.run(host=host, port=port, debug=debug)
