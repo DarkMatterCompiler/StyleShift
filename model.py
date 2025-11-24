@@ -813,22 +813,25 @@ class StyleAnalyzer:
 class StyleTransferEngine:
     """Uses style vector to guide LLM for style transfer"""
 
-    def __init__(self, ollama_model: str = "gemma3:4b"):
+    def __init__(self, ollama_model: str = "gemma3:4b", concise_mode: bool = True):
         """
         Initialize the engine with the Ollama model name.
 
         Args:
             ollama_model: The name of the local Ollama model to use.
+            concise_mode: If True, uses a more concise prompt to reduce over-elaboration.
         """
         self.ollama_model = ollama_model
+        self.concise_mode = concise_mode
 
-    def create_style_prompt(self, style_vector: StyleVector, author_name: str = "the target author") -> str:
+    def create_style_prompt(self, style_vector: StyleVector, author_name: str = "the target author", original_text: str = "") -> str:
         """
         Create a comprehensive style prompt based on the analyzed style vector.
 
         Args:
             style_vector: The style vector containing stylistic features.
             author_name: The name of the author whose style is being emulated.
+            original_text: The original text to be transformed (for length constraints).
 
         Returns:
             A detailed prompt to guide the LLM in style transfer.
@@ -839,14 +842,22 @@ class StyleTransferEngine:
             top_3_emotions = list(style_vector.top_emotions.items())[:3]
             emotion_str = ", ".join([f"{emotion} ({score:.2f})" for emotion, score in top_3_emotions])
         
+        # Calculate target word count based on original and style ratio
+        original_word_count = len(original_text.split()) if original_text else 10
+        # Allow 50% expansion for stylistic elements, but cap it
+        max_expansion_ratio = 1.5
+        target_max_words = int(original_word_count * max_expansion_ratio)
+        
         prompt = f"""You are an expert literary style transfer assistant. Your task is to rewrite text to match the distinctive writing style of {author_name}, while preserving the original meaning and content completely.
 
-CRITICAL RULES:
+CRITICAL RULES - FOLLOW STRICTLY:
 1. Keep the EXACT same meaning, events, and information as the original
-2. Do NOT add new ideas, events, or elaborations
+2. Do NOT add new ideas, events, or elaborations beyond what's in the original
 3. Do NOT remove any important information from the original
 4. ONLY change HOW things are expressed, not WHAT is expressed
-5. Output ONLY the rewritten text - no explanations, notes, or commentary
+5. Maintain similar LENGTH: Original has ~{original_word_count} words, your output should be {original_word_count}-{target_max_words} words MAX
+6. If the original is SHORT (1-2 sentences), keep your output SHORT (1-2 sentences) in the new style
+7. Output ONLY the rewritten text - no explanations, notes, or commentary
 
 STYLE PROFILE OF {author_name.upper()}:
 Based on computational analysis of {author_name}'s writing, here are the key stylistic patterns to emulate:
@@ -897,15 +908,17 @@ Based on computational analysis of {author_name}'s writing, here are the key sty
 • Dialogue usage: {style_vector.dialogue_ratio:.2f}
 
 STYLE TRANSFER INSTRUCTIONS:
-Match these metrics as closely as possible. Pay special attention to:
-- Sentence length and variation
-- Word choice from the preferred vocabulary
-- Active/passive voice ratio
+Match these metrics as closely as possible while keeping the output concise. Pay special attention to:
+- Sentence length: Keep around {style_vector.avg_words_per_sentence:.0f} words per sentence
+- Word choice from the preferred vocabulary: {', '.join(style_vector.top_words[:8])}
+- Active/passive voice ratio: {style_vector.active_voice_ratio:.0%} active
 - Punctuation patterns (especially {'semicolons, ' if style_vector.semicolon_frequency > 0.01 else ''}{'dashes, ' if style_vector.dash_frequency > 0.01 else ''}commas)
-- Emotional tone and formality
-- Use of archaic or formal language if present
+- Emotional tone: {style_vector.sentiment_polarity:.1f} sentiment
+- Formality level: {style_vector.formality_score:.1f}
 
-Now, rewrite the following text in the style of {author_name}. Remember: preserve ALL content and meaning, only change the expression:
+IMPORTANT: Match the LENGTH of the original. Do not expand unnecessarily!
+
+Now, rewrite the following text in the style of {author_name}. Remember: preserve ALL content and meaning, maintain similar length (~{original_word_count} words), only change the expression:
 
 TEXT TO REWRITE:
 """
@@ -927,7 +940,7 @@ TEXT TO REWRITE:
         import json as _json
 
         # Create the style prompt
-        prompt = self.create_style_prompt(style_vector, author_name)
+        prompt = self.create_style_prompt(style_vector, author_name, text)
         full_prompt = f"{prompt}\n{text}"
 
         http_err = None
@@ -935,12 +948,32 @@ TEXT TO REWRITE:
         # 1) Try Ollama HTTP API (if server is already running)
         try:
             api_url = "http://127.0.0.1:11434/api/generate"
-            payload = {"model": self.ollama_model, "prompt": full_prompt, "stream": False}
-            resp = requests.post(api_url, json=payload, timeout=30)
+            payload = {
+                "model": self.ollama_model, 
+                "prompt": full_prompt, 
+                "stream": False,
+                "options": {
+                    "num_ctx": 2048,
+                    "num_predict": min(512, len(text.split()) * 3),  # Limit based on input
+                    "temperature": 0.7,
+                    "top_p": 0.9
+                }
+            }
+            resp = requests.post(api_url, json=payload, timeout=60)
             if resp.ok:
                 data = resp.json()
                 if isinstance(data, dict) and 'response' in data:
-                    return data['response']
+                    result = data['response'].strip()
+                    
+                    # Validate output length (shouldn't be > 2x original)
+                    original_words = len(text.split())
+                    result_words = len(result.split())
+                    
+                    # If output is excessively long, warn user
+                    if result_words > original_words * 2.5:
+                        result = f"[Note: Output may be over-elaborated ({result_words} vs {original_words} original words)]\n\n{result}"
+                    
+                    return result
                 else:
                     return f"OLLAMA_HTTP_OK_BUT_UNEXPECTED_JSON: {_json.dumps(data)[:2000]}"
             else:
